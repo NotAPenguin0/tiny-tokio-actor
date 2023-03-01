@@ -19,6 +19,7 @@ log = "0.4"
 anyhow = "1.0"
 thiserror = "1.0"
 async-channel = "1.8.0"
+actor-macros = { path = "actor-macros" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

@@ -120,3 +120,5 @@ pub use system::{ActorSystem, SystemEvent};
 
 pub use async_trait::async_trait;
 pub use tokio::time::Duration;
+
+pub use actor_macros::*;
