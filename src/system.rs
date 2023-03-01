@@ -7,6 +7,8 @@ use crate::{
     bus::{EventBus, EventReceiver},
     ActorError, ActorPath,
 };
+use crate::actor::MultiActorRef;
+use crate::actor::runner::MultiActorRunner;
 
 /// Events that this actor system will send
 pub trait SystemEvent: Clone + Send + Sync + 'static {}
@@ -76,6 +78,33 @@ impl<E: SystemEvent> ActorSystem<E> {
         Ok(actor_ref)
     }
 
+    pub(crate) async fn create_multi_actor_path<A: Actor<E>>(
+        &self,
+        path: ActorPath,
+        num_runners: u32,
+        actor: A,
+    ) -> Result<MultiActorRef<E, A>, ActorError> {
+        log::debug!("Creating multi actor '{}' on system '{}' with {} listeners...", &path, &self.name, num_runners);
+
+        let mut actors = self.actors.write().await;
+        if actors.contains_key(&path) {
+            return Err(ActorError::Exists(path));
+        }
+
+        let system = self.clone();
+        let (mut runner, actor_ref) = MultiActorRunner::create(path, actor);
+        tokio::spawn(async move {
+            runner.start(system, num_runners).await;
+        });
+
+        let path = actor_ref.path().clone();
+        let any = Box::new(actor_ref.clone());
+
+        actors.insert(path, any);
+
+        Ok(actor_ref)
+    }
+
     /// Launches a new top level actor on this actor system at the '/user' actor path. If another actor with
     /// the same name already exists, an `Err(ActorError::Exists(ActorPath))` is returned instead.
     pub async fn create_actor<A: Actor<E>>(
@@ -85,6 +114,16 @@ impl<E: SystemEvent> ActorSystem<E> {
     ) -> Result<ActorRef<E, A>, ActorError> {
         let path = ActorPath::from("/user") / name;
         self.create_actor_path(path, actor).await
+    }
+
+    pub async fn create_multi_actor<A: Actor<E>>(
+        &self,
+        name: &str,
+        num_runners: u32,
+        actor: A
+    ) -> Result<MultiActorRef<E, A>, ActorError> {
+        let path = ActorPath::from("/user") / name;
+        self.create_multi_actor_path(path, num_runners, actor).await
     }
 
     /// Retrieve or create a new actor on this actor system if it does not exist yet.

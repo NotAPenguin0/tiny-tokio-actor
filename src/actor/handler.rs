@@ -2,11 +2,13 @@ use std::marker::PhantomData;
 
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
+use async_channel;
 
 use crate::{
     actor::{ActorContext, Handler, Message},
     system::SystemEvent,
 };
+use crate::actor::MultiHandler;
 
 use super::Actor;
 
@@ -15,12 +17,28 @@ pub trait MessageHandler<E: SystemEvent, A: Actor<E>>: Send + Sync {
     async fn handle(&mut self, actor: &mut A, ctx: &mut ActorContext<E>);
 }
 
+#[async_trait]
+pub trait MultiMessageHandler<E: SystemEvent, A: Actor<E>>: Send + Sync {
+    async fn handle(&mut self, actor: &mut A);
+}
+
 pub(crate) struct ActorMessage<M, E, A>
 where
     M: Message,
     E: SystemEvent,
     A: Handler<E, M>,
 {
+    payload: M,
+    rsvp: Option<oneshot::Sender<M::Response>>,
+    _phantom_actor: PhantomData<A>,
+    _phantom_event: PhantomData<E>,
+}
+
+pub(crate) struct MultiActorMessage<M, E, A>
+where
+    M: Message,
+    E: SystemEvent,
+    A: MultiHandler<E, M> {
     payload: M,
     rsvp: Option<oneshot::Sender<M::Response>>,
     _phantom_actor: PhantomData<A>,
@@ -36,6 +54,24 @@ where
 {
     async fn handle(&mut self, actor: &mut A, ctx: &mut ActorContext<E>) {
         let result = actor.handle(self.payload.clone(), ctx).await;
+
+        if let Some(rsvp) = std::mem::replace(&mut self.rsvp, None) {
+            rsvp.send(result).unwrap_or_else(|_failed| {
+                log::error!("Failed to send back response!");
+            })
+        }
+    }
+}
+
+#[async_trait]
+impl<M, E, A> MultiMessageHandler<E, A> for MultiActorMessage<M, E, A>
+    where
+        M: Message,
+        E: SystemEvent,
+        A: MultiHandler<E, M>,
+{
+    async fn handle(&mut self, actor: &mut A) {
+        let result = unsafe { actor.handle(self.payload.clone()).await };
 
         if let Some(rsvp) = std::mem::replace(&mut self.rsvp, None) {
             rsvp.send(result).unwrap_or_else(|_failed| {
@@ -61,12 +97,37 @@ where
     }
 }
 
+impl<M, E, A> MultiActorMessage<M, E, A>
+    where
+        M: Message,
+        E: SystemEvent,
+        A: MultiHandler<E, M>,
+{
+    pub fn new(msg: M, rsvp: Option<oneshot::Sender<M::Response>>) -> Self {
+        MultiActorMessage {
+            payload: msg,
+            rsvp,
+            _phantom_actor: PhantomData,
+            _phantom_event: PhantomData,
+        }
+    }
+}
+
 pub type BoxedMessageHandler<E, A> = Box<dyn MessageHandler<E, A>>;
+pub type BoxedMultiMessageHandler<E, A> = Box<dyn MultiMessageHandler<E, A>>;
 
 pub type MailboxReceiver<E, A> = mpsc::UnboundedReceiver<BoxedMessageHandler<E, A>>;
 pub type MailboxSender<E, A> = mpsc::UnboundedSender<BoxedMessageHandler<E, A>>;
 
+pub type MailboxMultiReceiver<E, A> = async_channel::Receiver<BoxedMultiMessageHandler<E, A>>;
+pub type MailboxMultiSender<E, A> = async_channel::Sender<BoxedMultiMessageHandler<E, A>>;
+
 pub struct ActorMailbox<E: SystemEvent, A: Actor<E>> {
+    _phantom_actor: PhantomData<A>,
+    _phantom_event: PhantomData<E>,
+}
+
+pub struct MultiActorMailbox<E: SystemEvent, A: Actor<E>> {
     _phantom_actor: PhantomData<A>,
     _phantom_event: PhantomData<E>,
 }
@@ -74,6 +135,12 @@ pub struct ActorMailbox<E: SystemEvent, A: Actor<E>> {
 impl<E: SystemEvent, A: Actor<E>> ActorMailbox<E, A> {
     pub fn create() -> (MailboxSender<E, A>, MailboxReceiver<E, A>) {
         mpsc::unbounded_channel()
+    }
+}
+
+impl<E: SystemEvent, A: Actor<E>> MultiActorMailbox<E, A> {
+    pub fn create() -> (MailboxMultiSender<E, A>, MailboxMultiReceiver<E, A>) {
+        async_channel::unbounded()
     }
 }
 

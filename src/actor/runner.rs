@@ -1,3 +1,5 @@
+use crate::actor::handler::{MailboxMultiReceiver, MultiActorMailbox};
+use crate::actor::MultiActorRef;
 use crate::system::{ActorSystem, SystemEvent};
 
 use super::{
@@ -9,6 +11,12 @@ pub(crate) struct ActorRunner<E: SystemEvent, A: Actor<E>> {
     path: ActorPath,
     actor: A,
     receiver: MailboxReceiver<E, A>,
+}
+
+pub(crate) struct MultiActorRunner<E: SystemEvent, A: Actor<E>> {
+    path: ActorPath,
+    actor: A,
+    receiver: MailboxMultiReceiver<E, A>,
 }
 
 impl<E: SystemEvent, A: Actor<E>> ActorRunner<E, A> {
@@ -89,6 +97,116 @@ impl<E: SystemEvent, A: Actor<E>> ActorRunner<E, A> {
         }
 
         self.receiver.close();
+    }
+}
+
+struct ActorPtr<A> {
+    pub ptr: *mut A,
+}
+
+impl<A> Copy for ActorPtr<A> {}
+
+impl<A> Clone for ActorPtr<A> {
+    fn clone(&self) -> Self {
+        Self {
+            ptr: self.ptr.clone()
+        }
+    }
+}
+
+unsafe impl<A> Send for ActorPtr<A> {}
+unsafe impl<A> Sync for ActorPtr<A> {}
+
+impl<E: SystemEvent, A: Actor<E>> MultiActorRunner<E, A> {
+    pub fn create(path: ActorPath, actor: A) -> (Self, MultiActorRef<E, A>) {
+        let (sender, receiver) = MultiActorMailbox::create();
+        let actor_ref = MultiActorRef::new(path.clone(), sender);
+        let runner = MultiActorRunner {
+            path,
+            actor,
+            receiver,
+        };
+        (runner, actor_ref)
+    }
+
+    async fn handler(receiver: MailboxMultiReceiver<E, A>, actor: ActorPtr<A>, path: ActorPath) {
+        // If a timeout is set for this actor make sure to apply it
+        if let Some(timeout) = A::timeout() {
+            log::debug!("Timeout of {:?} set for actor {}", timeout, &path);
+            while let Ok(Ok(mut msg)) = tokio::time::timeout(timeout, receiver.recv()).await {
+                let actor = unsafe { actor.ptr.as_mut().unwrap() };
+                msg.handle(actor).await;
+            }
+            log::debug!("Actor timed out after {:?} of inactivity.", timeout);
+        } else {
+            // No timeout for this actor so wait indefinitely
+            while let Ok(mut msg) = receiver.recv().await {
+                let actor = unsafe { actor.ptr.as_mut().unwrap() };
+                msg.handle(actor).await;
+            }
+        }
+    }
+
+    pub async fn start(&mut self, system: ActorSystem<E>, num_instances: u32) {
+        log::debug!("Starting multi actor '{}'...", &self.path);
+
+        let mut ctx = ActorContext {
+            path: self.path.clone(),
+            system: system.clone(),
+        };
+
+        // Start the actor
+        let mut start_error = self.actor.pre_start(&mut ctx).await.err();
+
+        // Did we encounter an error at startup? If yes, initiate supervision strategy
+        if start_error.is_some() {
+            let mut retries = 0;
+            match A::supervision_strategy() {
+                SupervisionStrategy::Stop => {
+                    log::error!("Actor '{}' failed to start!", &self.path);
+                }
+                SupervisionStrategy::Retry(mut retry_strategy) => {
+                    log::debug!(
+                        "Restarting actor with retry strategy: {:?}",
+                        &retry_strategy
+                    );
+                    while retries < retry_strategy.max_retries() && start_error.is_some() {
+                        log::debug!("retries: {}", &retries);
+                        if let Some(duration) = retry_strategy.next_backoff() {
+                            log::debug!("Backoff for {:?}", &duration);
+                            tokio::time::sleep(duration).await;
+                        }
+                        retries += 1;
+                        start_error = ctx
+                            .restart(&mut self.actor, start_error.as_ref())
+                            .await
+                            .err();
+                    }
+                }
+            }
+        }
+
+        // No errors encountered at startup, so let's run the actor...
+        if start_error.is_none() {
+            log::debug!("Actor '{}' has started successfully.", &self.path);
+
+            let actor_ptr = ActorPtr { ptr: &mut self.actor };
+            // Spawn N handler() calls
+            for i in 0..num_instances {
+                let recv = self.receiver.clone();
+                let path = self.path.clone();
+                tokio::spawn(async move {
+                    Self::handler(recv, actor_ptr, path).await
+                });
+            }
+
+            // Actor receiver has closed, so stop the actor
+            self.actor.post_stop(&mut ctx).await;
+            // and remove it from the running system
+            system.stop_actor(&self.path).await;
+
+            log::debug!("Actor '{}' stopped.", &self.path);
+        }
     }
 }
 

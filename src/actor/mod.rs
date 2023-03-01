@@ -180,6 +180,11 @@ pub trait Handler<E: SystemEvent, M: Message>: Actor<E> {
     async fn handle(&mut self, msg: M, ctx: &mut ActorContext<E>) -> M::Response;
 }
 
+#[async_trait]
+pub unsafe trait MultiHandler<E: SystemEvent, M: Message>: Actor<E> {
+    async unsafe fn handle(&mut self, msg: M) -> M::Response;
+}
+
 /// A clonable actor reference. It basically holds a Sender that can send messages
 /// to the mailbox (receiver) of the actor.
 pub struct ActorRef<E: SystemEvent, A: Actor<E>> {
@@ -187,7 +192,18 @@ pub struct ActorRef<E: SystemEvent, A: Actor<E>> {
     sender: mpsc::UnboundedSender<handler::BoxedMessageHandler<E, A>>,
 }
 
+pub struct MultiActorRef<E: SystemEvent, A: Actor<E>> {
+    path: ActorPath,
+    sender: handler::MailboxMultiSender<E, A>,
+}
+
 impl<E: SystemEvent, A: Actor<E>> Clone for ActorRef<E, A> {
+    fn clone(&self) -> Self {
+        Self { path: self.path.clone(), sender: self.sender.clone() }
+    }
+}
+
+impl<E: SystemEvent, A: Actor<E>> Clone for MultiActorRef<E, A> {
     fn clone(&self) -> Self {
         Self { path: self.path.clone(), sender: self.sender.clone() }
     }
@@ -246,7 +262,66 @@ impl<E: SystemEvent, A: Actor<E>> ActorRef<E, A> {
     }
 }
 
+impl<E: SystemEvent, A: Actor<E>> MultiActorRef<E, A> {
+    /// Get the path of this actor
+    pub fn path(&self) -> &ActorPath {
+        &self.path
+    }
+
+    /// Fire and forget sending of messages to this actor.
+    pub fn tell<M>(&self, msg: M) -> Result<(), ActorError>
+        where
+            M: Message,
+            A: MultiHandler<E, M>,
+    {
+        let message = handler::MultiActorMessage::<M, E, A>::new(msg, None);
+        if let Err(error) = self.sender.send_blocking(Box::new(message)) {
+            log::error!("Failed to tell message! {}", error.to_string());
+            Err(ActorError::SendError(error.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Send a message to an actor, expecting a response.
+    pub async fn ask<M>(&self, msg: M) -> Result<M::Response, ActorError>
+        where
+            M: Message,
+            A: MultiHandler<E, M>,
+    {
+        let (response_sender, response_receiver) = oneshot::channel();
+        let message = handler::MultiActorMessage::<M, E, A>::new(msg, Some(response_sender));
+        if let Err(error) = self.sender.send(Box::new(message)).await {
+            log::error!("Failed to ask message! {}", error.to_string());
+            Err(ActorError::SendError(error.to_string()))
+        } else {
+            response_receiver
+                .await
+                .map_err(|error| ActorError::SendError(error.to_string()))
+        }
+    }
+
+    /// Checks if the actor mailbox is still open. If it is closed, the actor
+    /// is not running.
+    pub fn is_closed(&self) -> bool {
+        self.sender.is_closed()
+    }
+
+    pub(crate) fn new(path: ActorPath, sender: handler::MailboxMultiSender<E, A>) -> Self {
+        MultiActorRef {
+            path,
+            sender,
+        }
+    }
+}
+
 impl<E: SystemEvent, A: Actor<E>> std::fmt::Debug for ActorRef<E, A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.path)
+    }
+}
+
+impl<E: SystemEvent, A: Actor<E>> std::fmt::Debug for MultiActorRef<E, A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.path)
     }
