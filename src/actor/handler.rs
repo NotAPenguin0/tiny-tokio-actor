@@ -8,7 +8,7 @@ use crate::{
     actor::{ActorContext, Handler, Message},
     system::SystemEvent,
 };
-use crate::actor::MultiHandler;
+use crate::actor::ConcurrentHandler;
 
 use super::Actor;
 
@@ -18,7 +18,7 @@ pub trait MessageHandler<E: SystemEvent, A: Actor<E>>: Send + Sync {
 }
 
 #[async_trait]
-pub trait MultiMessageHandler<E: SystemEvent, A: Actor<E>>: Send + Sync {
+pub trait ConcurrentMessageHandler<E: SystemEvent, A: Actor<E>>: Send + Sync {
     async fn handle(&mut self, actor: &mut A);
 }
 
@@ -34,11 +34,11 @@ where
     _phantom_event: PhantomData<E>,
 }
 
-pub(crate) struct MultiActorMessage<M, E, A>
+pub(crate) struct ConcurrentActorMessage<M, E, A>
 where
     M: Message,
     E: SystemEvent,
-    A: MultiHandler<E, M> {
+    A: ConcurrentHandler<E, M> {
     payload: M,
     rsvp: Option<oneshot::Sender<M::Response>>,
     _phantom_actor: PhantomData<A>,
@@ -64,11 +64,11 @@ where
 }
 
 #[async_trait]
-impl<M, E, A> MultiMessageHandler<E, A> for MultiActorMessage<M, E, A>
+impl<M, E, A> ConcurrentMessageHandler<E, A> for ConcurrentActorMessage<M, E, A>
     where
         M: Message,
         E: SystemEvent,
-        A: MultiHandler<E, M>,
+        A: ConcurrentHandler<E, M>,
 {
     async fn handle(&mut self, actor: &mut A) {
         let result = unsafe { actor.handle(self.payload.clone()).await };
@@ -97,14 +97,14 @@ where
     }
 }
 
-impl<M, E, A> MultiActorMessage<M, E, A>
+impl<M, E, A> ConcurrentActorMessage<M, E, A>
     where
         M: Message,
         E: SystemEvent,
-        A: MultiHandler<E, M>,
+        A: ConcurrentHandler<E, M>,
 {
     pub fn new(msg: M, rsvp: Option<oneshot::Sender<M::Response>>) -> Self {
-        MultiActorMessage {
+        ConcurrentActorMessage {
             payload: msg,
             rsvp,
             _phantom_actor: PhantomData,
@@ -114,20 +114,20 @@ impl<M, E, A> MultiActorMessage<M, E, A>
 }
 
 pub type BoxedMessageHandler<E, A> = Box<dyn MessageHandler<E, A>>;
-pub type BoxedMultiMessageHandler<E, A> = Box<dyn MultiMessageHandler<E, A>>;
+pub type BoxedConcurrentMessageHandler<E, A> = Box<dyn ConcurrentMessageHandler<E, A>>;
 
 pub type MailboxReceiver<E, A> = mpsc::UnboundedReceiver<BoxedMessageHandler<E, A>>;
 pub type MailboxSender<E, A> = mpsc::UnboundedSender<BoxedMessageHandler<E, A>>;
 
-pub type MailboxMultiReceiver<E, A> = async_channel::Receiver<BoxedMultiMessageHandler<E, A>>;
-pub type MailboxMultiSender<E, A> = async_channel::Sender<BoxedMultiMessageHandler<E, A>>;
+pub type ConcurrentMailboxReceiver<E, A> = async_channel::Receiver<BoxedConcurrentMessageHandler<E, A>>;
+pub type ConcurrentMailboxSender<E, A> = async_channel::Sender<BoxedConcurrentMessageHandler<E, A>>;
 
 pub struct ActorMailbox<E: SystemEvent, A: Actor<E>> {
     _phantom_actor: PhantomData<A>,
     _phantom_event: PhantomData<E>,
 }
 
-pub struct MultiActorMailbox<E: SystemEvent, A: Actor<E>> {
+pub struct ConcurrentActorMailbox<E: SystemEvent, A: Actor<E>> {
     _phantom_actor: PhantomData<A>,
     _phantom_event: PhantomData<E>,
 }
@@ -138,8 +138,8 @@ impl<E: SystemEvent, A: Actor<E>> ActorMailbox<E, A> {
     }
 }
 
-impl<E: SystemEvent, A: Actor<E>> MultiActorMailbox<E, A> {
-    pub fn create() -> (MailboxMultiSender<E, A>, MailboxMultiReceiver<E, A>) {
+impl<E: SystemEvent, A: Actor<E>> ConcurrentActorMailbox<E, A> {
+    pub fn create() -> (ConcurrentMailboxSender<E, A>, ConcurrentMailboxReceiver<E, A>) {
         async_channel::unbounded()
     }
 }

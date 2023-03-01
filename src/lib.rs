@@ -99,7 +99,7 @@ mod system;
 
 pub use actor::{
     supervision::{RetryStrategy, SupervisionStrategy},
-    Actor, ActorContext, ActorError, ActorPath, ActorRef, Handler, Message, MultiHandler, MultiActorRef,
+    Actor, ActorContext, ActorError, ActorPath, ActorRef, Handler, Message, ConcurrentHandler, ConcurrentActorRef,
 };
 pub mod supervision {
     //! Actor Supervision Strategies

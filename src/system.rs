@@ -7,8 +7,8 @@ use crate::{
     bus::{EventBus, EventReceiver},
     ActorError, ActorPath,
 };
-use crate::actor::MultiActorRef;
-use crate::actor::runner::MultiActorRunner;
+use crate::actor::ConcurrentActorRef;
+use crate::actor::runner::ConcurrentActorRunner;
 
 /// Events that this actor system will send
 pub trait SystemEvent: Clone + Send + Sync + 'static {}
@@ -78,12 +78,12 @@ impl<E: SystemEvent> ActorSystem<E> {
         Ok(actor_ref)
     }
 
-    pub(crate) async fn create_multi_actor_path<A: Actor<E>>(
+    pub(crate) async fn create_concurrent_actor_path<A: Actor<E>>(
         &self,
         path: ActorPath,
         num_runners: u32,
         actor: A,
-    ) -> Result<MultiActorRef<E, A>, ActorError> {
+    ) -> Result<ConcurrentActorRef<E, A>, ActorError> {
         log::debug!("Creating multi actor '{}' on system '{}' with {} listeners...", &path, &self.name, num_runners);
 
         let mut actors = self.actors.write().await;
@@ -92,7 +92,7 @@ impl<E: SystemEvent> ActorSystem<E> {
         }
 
         let system = self.clone();
-        let (mut runner, actor_ref) = MultiActorRunner::create(path, actor);
+        let (mut runner, actor_ref) = ConcurrentActorRunner::create(path, actor);
         tokio::spawn(async move {
             runner.start(system, num_runners).await;
         });
@@ -116,14 +116,14 @@ impl<E: SystemEvent> ActorSystem<E> {
         self.create_actor_path(path, actor).await
     }
 
-    pub async fn create_multi_actor<A: Actor<E>>(
+    pub async fn create_concurrent_actor<A: Actor<E>>(
         &self,
         name: &str,
         num_runners: u32,
         actor: A
-    ) -> Result<MultiActorRef<E, A>, ActorError> {
+    ) -> Result<ConcurrentActorRef<E, A>, ActorError> {
         let path = ActorPath::from("/user") / name;
-        self.create_multi_actor_path(path, num_runners, actor).await
+        self.create_concurrent_actor_path(path, num_runners, actor).await
     }
 
     /// Retrieve or create a new actor on this actor system if it does not exist yet.

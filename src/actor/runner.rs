@@ -1,5 +1,5 @@
-use crate::actor::handler::{MailboxMultiReceiver, MultiActorMailbox};
-use crate::actor::MultiActorRef;
+use crate::actor::handler::{ConcurrentMailboxReceiver, ConcurrentActorMailbox};
+use crate::actor::ConcurrentActorRef;
 use crate::system::{ActorSystem, SystemEvent};
 
 use super::{
@@ -13,10 +13,10 @@ pub(crate) struct ActorRunner<E: SystemEvent, A: Actor<E>> {
     receiver: MailboxReceiver<E, A>,
 }
 
-pub(crate) struct MultiActorRunner<E: SystemEvent, A: Actor<E>> {
+pub(crate) struct ConcurrentActorRunner<E: SystemEvent, A: Actor<E>> {
     path: ActorPath,
     actor: A,
-    receiver: MailboxMultiReceiver<E, A>,
+    receiver: ConcurrentMailboxReceiver<E, A>,
 }
 
 impl<E: SystemEvent, A: Actor<E>> ActorRunner<E, A> {
@@ -117,11 +117,11 @@ impl<A> Clone for ActorPtr<A> {
 unsafe impl<A> Send for ActorPtr<A> {}
 unsafe impl<A> Sync for ActorPtr<A> {}
 
-impl<E: SystemEvent, A: Actor<E>> MultiActorRunner<E, A> {
-    pub fn create(path: ActorPath, actor: A) -> (Self, MultiActorRef<E, A>) {
-        let (sender, receiver) = MultiActorMailbox::create();
-        let actor_ref = MultiActorRef::new(path.clone(), sender);
-        let runner = MultiActorRunner {
+impl<E: SystemEvent, A: Actor<E>> ConcurrentActorRunner<E, A> {
+    pub fn create(path: ActorPath, actor: A) -> (Self, ConcurrentActorRef<E, A>) {
+        let (sender, receiver) = ConcurrentActorMailbox::create();
+        let actor_ref = ConcurrentActorRef::new(path.clone(), sender);
+        let runner = ConcurrentActorRunner {
             path,
             actor,
             receiver,
@@ -129,7 +129,7 @@ impl<E: SystemEvent, A: Actor<E>> MultiActorRunner<E, A> {
         (runner, actor_ref)
     }
 
-    async fn handler(receiver: MailboxMultiReceiver<E, A>, actor: ActorPtr<A>, path: ActorPath) {
+    async fn handler(receiver: ConcurrentMailboxReceiver<E, A>, actor: ActorPtr<A>, path: ActorPath) {
         // If a timeout is set for this actor make sure to apply it
         if let Some(timeout) = A::timeout() {
             log::debug!("Timeout of {:?} set for actor {}", timeout, &path);
