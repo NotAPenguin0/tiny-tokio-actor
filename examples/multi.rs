@@ -10,9 +10,8 @@ use tiny_tokio_actor::{Actor, ActorContext, ActorSystem, EventBus, Handler, Mess
 struct Event;
 impl SystemEvent for Event {}
 
+#[derive(Actor)]
 pub struct MyConcurrentActor {}
-
-impl Actor<Event> for MyConcurrentActor {}
 
 #[derive(Debug, Clone, Message)]
 #[response(String)]
