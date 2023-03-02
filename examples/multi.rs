@@ -13,6 +13,7 @@ impl SystemEvent for Event {}
 #[derive(Actor)]
 pub struct MyConcurrentActor {}
 
+// Some normal comment
 #[derive(Debug, Clone, Message)]
 #[response(String)]
 struct MyMessage(String);

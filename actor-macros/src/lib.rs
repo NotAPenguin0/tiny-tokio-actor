@@ -5,6 +5,11 @@ extern crate quote;
 
 use syn::parse::Parse;
 use proc_macro::{TokenStream};
+use std::str::FromStr;
+
+fn remove_doc_comments(s: String) -> String {
+    s.lines().filter(|line| ! line.starts_with("///")).collect()
+}
 
 fn impl_message(ast: &syn::DeriveInput) -> TokenStream {
     let name = &ast.ident;
@@ -35,7 +40,8 @@ fn impl_actor(ast: &syn::DeriveInput) -> TokenStream {
 #[proc_macro_derive(Message, attributes(response))]
 pub fn derive_message_impl(input: TokenStream) -> TokenStream {
     let s = input.to_string();
-    let ast = syn::parse::<syn::DeriveInput>(input).unwrap();
+    let s = remove_doc_comments(s);
+    let ast = syn::parse::<syn::DeriveInput>(TokenStream::from_str(&s).unwrap()).unwrap();
     let gen = impl_message(&ast);
     gen
 }
@@ -43,7 +49,8 @@ pub fn derive_message_impl(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Actor)]
 pub fn derive_actor_impl(input: TokenStream) -> TokenStream {
     let s = input.to_string();
-    let ast = syn::parse::<syn::DeriveInput>(input).unwrap();
+    let s = remove_doc_comments(s);
+    let ast = syn::parse::<syn::DeriveInput>(TokenStream::from_str(&s).unwrap()).unwrap();
     let gen = impl_actor(&ast);
     gen
 }
