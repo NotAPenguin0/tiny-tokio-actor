@@ -28,7 +28,7 @@ where
     E: SystemEvent,
     A: Handler<E, M>,
 {
-    payload: M,
+    payload: Option<M>,
     rsvp: Option<oneshot::Sender<M::Response>>,
     _phantom_actor: PhantomData<A>,
     _phantom_event: PhantomData<E>,
@@ -39,7 +39,7 @@ where
     M: Message,
     E: SystemEvent,
     A: ConcurrentHandler<E, M> {
-    payload: M,
+    payload: Option<M>,
     rsvp: Option<oneshot::Sender<M::Response>>,
     _phantom_actor: PhantomData<A>,
     _phantom_event: PhantomData<E>,
@@ -53,7 +53,7 @@ where
     A: Handler<E, M>,
 {
     async fn handle(&mut self, actor: &mut A, ctx: &mut ActorContext<E>) {
-        let result = actor.handle(self.payload.clone(), ctx).await;
+        let result = actor.handle(self.payload.take().unwrap(), ctx).await;
 
         if let Some(rsvp) = std::mem::replace(&mut self.rsvp, None) {
             rsvp.send(result).unwrap_or_else(|_failed| {
@@ -71,7 +71,7 @@ impl<M, E, A> ConcurrentMessageHandler<E, A> for ConcurrentActorMessage<M, E, A>
         A: ConcurrentHandler<E, M>,
 {
     async fn handle(&mut self, actor: &mut A) {
-        let result = unsafe { actor.handle(self.payload.clone()).await };
+        let result = unsafe { actor.handle(self.payload.take().unwrap()).await };
 
         if let Some(rsvp) = std::mem::replace(&mut self.rsvp, None) {
             rsvp.send(result).unwrap_or_else(|_failed| {
@@ -89,7 +89,7 @@ where
 {
     pub fn new(msg: M, rsvp: Option<oneshot::Sender<M::Response>>) -> Self {
         ActorMessage {
-            payload: msg,
+            payload: Some(msg),
             rsvp,
             _phantom_actor: PhantomData,
             _phantom_event: PhantomData,
@@ -105,7 +105,7 @@ impl<M, E, A> ConcurrentActorMessage<M, E, A>
 {
     pub fn new(msg: M, rsvp: Option<oneshot::Sender<M::Response>>) -> Self {
         ConcurrentActorMessage {
-            payload: msg,
+            payload: Some(msg),
             rsvp,
             _phantom_actor: PhantomData,
             _phantom_event: PhantomData,

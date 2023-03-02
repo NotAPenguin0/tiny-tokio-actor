@@ -72,7 +72,7 @@ impl<E: SystemEvent> ActorContext<E> {
 }
 
 /// Defines what an actor will receive as its message, and with what it should respond.
-pub trait Message: Clone + Send + Sync + 'static {
+pub trait Message: Send + Sync + 'static {
     /// response an actor should give when it receives this message. If no response is
     /// required, use `()`.
     type Response: Send + Sync + 'static;
