@@ -1,6 +1,7 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 
 use crate::{
     actor::{runner::ActorRunner, Actor, ActorRef},
@@ -13,10 +14,15 @@ use crate::actor::runner::ConcurrentActorRunner;
 /// Events that this actor system will send
 pub trait SystemEvent: Clone + Send + Sync + 'static {}
 
+struct JoinableActor {
+    pub actor: Box<dyn Any + Send + Sync + 'static>,
+    pub handle: Option<JoinHandle<()>>,
+}
+
 #[derive(Clone)]
 pub struct ActorSystem<E: SystemEvent> {
     name: String,
-    actors: Arc<RwLock<HashMap<ActorPath, Box<dyn Any + Send + Sync + 'static>>>>,
+    actors: Arc<RwLock<HashMap<ActorPath, JoinableActor>>>,
     bus: EventBus<E>,
 }
 
@@ -49,7 +55,7 @@ impl<E: SystemEvent> ActorSystem<E> {
         let actors = self.actors.read().await;
         actors
             .get(path)
-            .and_then(|any| any.downcast_ref::<ActorRef<E, A>>().cloned())
+            .and_then(|any| any.actor.downcast_ref::<ActorRef<E, A>>().cloned())
     }
 
     pub(crate) async fn create_actor_path<A: Actor<E>>(
@@ -66,14 +72,14 @@ impl<E: SystemEvent> ActorSystem<E> {
 
         let system = self.clone();
         let (mut runner, actor_ref) = ActorRunner::create(path, actor);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             runner.start(system).await;
         });
 
         let path = actor_ref.path().clone();
         let any = Box::new(actor_ref.clone());
 
-        actors.insert(path, any);
+        actors.insert(path, JoinableActor { actor: any, handle: Some(handle) });
 
         Ok(actor_ref)
     }
@@ -93,14 +99,14 @@ impl<E: SystemEvent> ActorSystem<E> {
 
         let system = self.clone();
         let (mut runner, actor_ref) = ConcurrentActorRunner::create(path, actor);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             runner.start(system, num_runners).await;
         });
 
         let path = actor_ref.path().clone();
         let any = Box::new(actor_ref.clone());
 
-        actors.insert(path, any);
+        actors.insert(path, JoinableActor { actor: any, handle: Some(handle) });
 
         Ok(actor_ref)
     }
@@ -164,10 +170,16 @@ impl<E: SystemEvent> ActorSystem<E> {
         log::debug!("Stopping actor '{}' on system '{}'...", &path, &self.name);
         let mut paths: Vec<ActorPath> = vec![path.clone()];
         {
-            let running_actors = self.actors.read().await;
-            for running in running_actors.keys() {
+            let mut running_actors = self.actors.write().await;
+            for (running, actor) in running_actors.iter_mut() {
                 if running.is_descendant_of(path) {
                     paths.push(running.clone());
+                    match actor.handle.take() {
+                        None => {}
+                        Some(join_handle) => {
+                            join_handle.await.unwrap();
+                        }
+                    }
                 }
             }
         }
